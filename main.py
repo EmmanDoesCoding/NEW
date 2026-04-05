@@ -1,11 +1,11 @@
 """
 main.py
 =======
-Sign Language Avatar  —  AVA
+Sign Language Avatar  -  AVA
 Starts with a main menu, choose Translator or Chatbot mode.
 
-Free API: Google Gemini (no credit card needed)
-Get your key at: https://aistudio.google.com/apikey
+Free API: OpenRouter (free models available, no credit card needed)
+Get your key at: https://openrouter.ai/keys
 
 Controls (inside the app):
     Mouse drag   orbit camera
@@ -25,9 +25,10 @@ from direct.gui.OnscreenText             import OnscreenText
 from direct.showbase.ShowBaseGlobal      import globalClock
 from panda3d.core                        import TextNode, LColor, TransparencyAttrib
 
-from nlp_processor   import NLPProcessor
-from sign_mapper      import SignMapper
-from animation_queue  import AnimationQueue
+from nlp_processor       import NLPProcessor
+from sign_mapper          import SignMapper
+from animation_queue      import AnimationQueue
+from tagalog_translator   import TagalogTranslator
 
 import AVA_panda3d as _ava_mod
 Avatar                = _ava_mod.Avatar
@@ -39,11 +40,10 @@ SIGNS_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Signs")
 ANIM_FPS     = 30
 BLEND_FRAMES = 8
 
-# Google Gemini — free, no credit card
-# Get key: https://aistudio.google.com/apikey
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
-GEMINI_URL     = ("https://generativelanguage.googleapis.com/v1beta/models/"
-                  "gemini-2.0-flash:generateContent?key=")
+# OpenRouter - free models available, no credit card needed for free tier
+# Get key: https://openrouter.ai/keys
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "YOUR_OPENROUTER_API_KEY_HERE")
+OPENROUTER_MODEL   = "google/gemma-3-4b-it:free"   # free model, swap as needed
 
 CHATBOT_PROMPT = """You are AVA, a friendly sign language avatar assistant.
 Answer in EXACTLY 1 to 2 short sentences.
@@ -53,41 +53,75 @@ Rules:
 - No contractions (say "do not" not "don't")
 - Be warm and friendly"""
 
-# ── Colour palette ────────────────────────────────────────────────────────────
-# All colours as (R, G, B, A) 0-1 floats
-C_BG         = (0.08, 0.09, 0.11, 1)      # near-black background
-C_CARD       = (0.13, 0.14, 0.18, 1)      # card / panel
-C_ACCENT1    = (0.20, 0.55, 0.90, 1)      # blue  — translator
-C_ACCENT2    = (0.55, 0.25, 0.85, 1)      # purple — chatbot
-C_ACCENT1_DIM= (0.10, 0.28, 0.45, 1)
-C_ACCENT2_DIM= (0.28, 0.12, 0.42, 1)
-C_TEXT       = (0.92, 0.93, 0.95, 1)
-C_TEXT_DIM   = (0.55, 0.57, 0.62, 1)
-C_SUCCESS    = (0.25, 0.82, 0.55, 1)
-C_WARN       = (0.95, 0.75, 0.25, 1)
-C_INPUT_BG   = (0.10, 0.11, 0.14, 1)
+# ── Design tokens  (mobile-first, OLED-friendly dark palette) ─────────────────
+# Backgrounds
+C_BG         = (0.05, 0.05, 0.07, 1)
+C_SURFACE    = (0.09, 0.10, 0.13, 1)
+C_SURFACE2   = (0.12, 0.13, 0.17, 1)
+# Brand accents
+C_BLUE       = (0.22, 0.58, 1.00, 1)
+C_GREEN      = (0.12, 0.82, 0.54, 1)
+C_PURPLE     = (0.62, 0.28, 1.00, 1)
+C_BLUE_DIM   = (0.07, 0.16, 0.30, 1)
+C_GREEN_DIM  = (0.05, 0.22, 0.15, 1)
+C_PURPLE_DIM = (0.16, 0.08, 0.28, 1)
+# Text
+C_TEXT       = (0.95, 0.96, 0.98, 1)
+C_TEXT_DIM   = (0.50, 0.52, 0.58, 1)
+C_TEXT_HINT  = (0.32, 0.34, 0.40, 1)
+# Semantic
+C_SUCCESS    = (0.20, 0.88, 0.56, 1)
+C_WARN       = (1.00, 0.76, 0.18, 1)
+C_ERROR      = (1.00, 0.38, 0.38, 1)
+# Aliases
+C_CARD       = C_SURFACE
+C_INPUT_BG   = C_SURFACE2
+C_ACCENT1    = C_BLUE
+C_ACCENT2    = C_PURPLE
+C_ACCENT3    = C_GREEN
+C_ACCENT1_DIM= C_BLUE_DIM
+C_ACCENT2_DIM= C_PURPLE_DIM
+C_ACCENT3_DIM= C_GREEN_DIM
+C_BORDER     = (0.18, 0.20, 0.26, 1)
 
 
-# ── Gemini API ────────────────────────────────────────────────────────────────
+# ── OpenRouter API ────────────────────────────────────────────────────────────
 
-def call_gemini(question: str) -> str:
-    if GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
-        return "I do not have an API key. Please add your Gemini API key."
+def call_openrouter(question: str) -> str:
+    if OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE":
+        return "I do not have an API key. Please add your OpenRouter API key."
+
+    # Gemma (and many free models) do not support the "system" role.
+    # Prepend the system prompt as the first user turn instead - works universally.
+    combined = f"{CHATBOT_PROMPT}\n\nUser: {question}"
+
     payload = _json.dumps({
-        "system_instruction": {"parts": [{"text": CHATBOT_PROMPT}]},
-        "contents":           [{"parts": [{"text": question}]}],
-        "generationConfig":   {"maxOutputTokens": 80, "temperature": 0.7}
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {"role": "user", "content": combined}
+        ],
+        "max_tokens": 80,
+        "temperature": 0.7
     }).encode()
     req = urllib.request.Request(
-        GEMINI_URL + GEMINI_API_KEY,
+        "https://openrouter.ai/api/v1/chat/completions",
         data=payload, method="POST",
-        headers={"Content-Type": "application/json"})
+        headers={
+            "Content-Type":  "application/json",
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "HTTP-Referer":  "https://github.com/AVA-sign-avatar",
+            "X-Title":       "AVA Sign Language Avatar",
+        })
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             data = _json.loads(r.read())
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            return data["choices"][0]["message"]["content"].strip()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        print(f"[OpenRouter] HTTP {e.code}: {body}")
+        return ""
     except Exception as e:
-        print(f"[Gemini] Error: {e}")
+        print(f"[OpenRouter] Error: {e}")
         return ""
 
 
@@ -98,15 +132,23 @@ class AVAApp(Avatar):
     SCREEN_MENU       = "menu"
     SCREEN_TRANSLATOR = "translator"
     SCREEN_CHATBOT    = "chatbot"
+    SCREEN_TAGALOG    = "tagalog"
 
     def __init__(self):
         super().__init__()
+
+        # Restyle the HUD inherited from Avatar to match new design
+        self.hud.setPos(-1.28, 0.93)
+        self.hud.setScale(0.036)
+        self.hud["fg"] = (0.40, 0.42, 0.48, 1)
 
         # pipeline
         print("\n[AVA] Loading pipeline...")
         self.nlp    = NLPProcessor()
         self.mapper = SignMapper(SIGNS_FOLDER)
         self.aqueue = AnimationQueue(blend_frames=BLEND_FRAMES)
+        self.tl     = TagalogTranslator(api_key=OPENROUTER_API_KEY,
+                                        model=OPENROUTER_MODEL)
         print(f"[AVA] {self.mapper.stats()['indexed_keys']} signs indexed")
         self._calibrate()
 
@@ -127,6 +169,7 @@ class AVAApp(Avatar):
         self._pend_status  = None
         self._pend_ai      = None
         self._pend_think   = None
+        self._pend_tl      = None    # Tagalog -> English translated text
 
         # widget groups (destroyed when switching screens)
         self._ui_nodes = []
@@ -147,6 +190,18 @@ class AVAApp(Avatar):
             if frames:
                 calibrate_from_frames(frames)
 
+    # ── Avatar visibility ─────────────────────────────────────────────────────
+    def _hide_avatar(self):
+        """Hide all geometry nodes during menu screen."""
+        for node in self.G.values():
+            node.hide()
+
+    def _show_avatar(self):
+        """Restore avatar visibility when entering a mode."""
+        # Nodes will be shown by _pose() on next tick - just un-hide all
+        for node in self.G.values():
+            node.show()
+
     # ── UI helpers ────────────────────────────────────────────────────────────
     def _clear_ui(self):
         for node in self._ui_nodes:
@@ -155,7 +210,6 @@ class AVAApp(Avatar):
         self._ui_nodes = []
 
     def _track(self, widget):
-        """Register a widget so it gets destroyed on screen switch."""
         self._ui_nodes.append(widget)
         return widget
 
@@ -166,187 +220,286 @@ class AVAApp(Avatar):
         return self._track(w)
 
     def _btn(self, text, pos, scale, color, text_color, cmd):
+        """Pill-shaped primary action button."""
         w = DirectButton(
             text=text, scale=scale, pos=pos, command=cmd,
             frameColor=color, text_fg=text_color,
             relief=1, rolloverSound=None, clickSound=None,
-            text_scale=1.0, pad=(0.25, 0.15))
+            text_scale=1.0, pad=(0.40, 0.18),
+            frameSize=None)
         return self._track(w)
+
+    def _ghost_btn(self, text, pos, scale, color, cmd):
+        """Small ghost/text-only back button."""
+        w = DirectButton(
+            text=text, scale=scale, pos=pos, command=cmd,
+            frameColor=(0.12, 0.13, 0.17, 0.85),
+            text_fg=color,
+            relief=1, rolloverSound=None, clickSound=None,
+            text_scale=1.0, pad=(0.30, 0.14))
+        return self._track(w)
+
+    def _panel(self, x, y, w, h, color):
+        """Flat filled rectangle panel."""
+        hw, hh = w / 2, h / 2
+        f = DirectFrame(frameSize=(-hw, hw, -hh, hh),
+                        pos=(x, 0, y), frameColor=color)
+        return self._track(f)
+
+    def _hline(self, y, color=C_BORDER):
+        """Full-width 1px separator line."""
+        f = DirectFrame(frameSize=(-2.0, 2.0, -0.002, 0.002),
+                        pos=(0, 0, y), frameColor=color)
+        return self._track(f)
+
+    def _badge(self, text, x, y, color):
+        """Small coloured pill label (mode badge)."""
+        # background pill
+        self._track(DirectFrame(
+            frameSize=(-0.14, 0.14, -0.030, 0.030),
+            pos=(x, 0, y),
+            frameColor=(*color[:3], 0.18)))
+        self._label(text, (x, y - 0.008), 0.032, color)
 
     # ── MENU SCREEN ───────────────────────────────────────────────────────────
     def _build_menu(self):
         self._clear_ui()
         self._screen = self.SCREEN_MENU
+        self._hide_avatar()
+        self.aqueue.clear(smooth=False)
+        self.setBackgroundColor(*C_BG)
 
-        # Title
-        self._label("AVA", (0, 0.70), 0.18, C_TEXT)
-        self._label("Sign Language Avatar", (0, 0.55), 0.058, C_TEXT_DIM)
+        # ── Full backdrop ──────────────────────────────────────────────────────
+        self._panel(0, 0, 4.0, 2.6, C_BG)
 
-        # Divider line (thin rectangle)
-        line = DirectFrame(
-            frameSize=(-0.55, 0.55, -0.003, 0.003),
-            pos=(0, 0, 0.46),
-            frameColor=(0.25, 0.27, 0.32, 1))
-        self._track(line)
+        # ── Subtle gradient top glow  (blue tint strip) ───────────────────────
+        self._track(DirectFrame(
+            frameSize=(-2.0, 2.0, -0.003, 0.003),
+            pos=(0, 0, 0.97), frameColor=C_BLUE))
+        self._track(DirectFrame(
+            frameSize=(-2.0, 2.0, -0.18, 0.0),
+            pos=(0, 0, 1.10),
+            frameColor=(0.09, 0.17, 0.36, 0.28)))
 
-        # Subtitle
-        self._label("Choose a mode to get started",
-                    (0, 0.38), 0.045, C_TEXT_DIM)
+        # ── Logo / title area ──────────────────────────────────────────────────
+        # "AVA" large wordmark
+        self._label("AVA", (0, 0.70), 0.22, C_TEXT)
+        # Accent underline beneath AVA
+        self._track(DirectFrame(
+            frameSize=(-0.22, 0.22, -0.006, 0.006),
+            pos=(0, 0, 0.62), frameColor=C_BLUE))
+        self._label("Sign Language Avatar", (0, 0.50), 0.048, C_TEXT_DIM)
+        self._label("Choose a mode to begin",
+                    (0, 0.40), 0.034, C_TEXT_HINT)
 
-        # ── Translator card ───────────────────────────────────────────────────
-        card1 = DirectFrame(
-            frameSize=(-0.52, 0.52, -0.22, 0.22),
-            pos=(-0.60, 0, 0.05),
-            frameColor=C_CARD)
-        self._track(card1)
+        # ── Mode cards  ── stacked vertically, mobile-style ───────────────────
+        #   Each card: dark surface + coloured left-edge bar + icon emoji + text
 
-        self._label("Translator", (-0.60, 0.24), 0.070, C_ACCENT1)
-        self._label("Type any sentence and the\navatar will sign it for you.",
-                    (-0.60, 0.08), 0.040, C_TEXT_DIM)
+        def mode_card(cy, accent, dim, icon, title, desc, btn_label, cmd):
+            # Card spans full width, fixed height
+            self._track(DirectFrame(
+                frameSize=(-1.55, 1.55, -0.175, 0.175),
+                pos=(0, 0, cy), frameColor=dim))
+            # Left accent bar
+            self._track(DirectFrame(
+                frameSize=(-1.55, -1.46, -0.175, 0.175),
+                pos=(0, 0, cy), frameColor=accent))
+            # Icon - absolute screen pos
+            self._label(icon,  (-1.28, cy + 0.055), 0.075, accent)
+            # Title - left-aligned, absolute
+            self._label(title, (-0.92, cy + 0.065), 0.050, C_TEXT,
+                        align=TextNode.ALeft)
+            # Description - left-aligned, absolute
+            self._label(desc,  (-0.92, cy - 0.060), 0.032, C_TEXT_DIM,
+                        align=TextNode.ALeft)
+            # Pill button - right side
+            self._btn(btn_label, (1.22, 0, cy), 0.038,
+                      accent, (0.03, 0.03, 0.05, 1), cmd)
 
-        self._btn("Start Translating  ▶",
-                  (-0.60, 0, -0.12), 0.052,
-                  C_ACCENT1, (1,1,1,1),
-                  self._open_translator)
+        mode_card( 0.15, C_BLUE,   C_BLUE_DIM,
+                  "[EN]", "TRANSLATOR",
+                  "Type English  ->  AVA signs it live",
+                  "Start >", self._open_translator)
 
-        # ── Chatbot card ──────────────────────────────────────────────────────
-        card2 = DirectFrame(
-            frameSize=(-0.52, 0.52, -0.22, 0.22),
-            pos=(0.60, 0, 0.05),
-            frameColor=C_CARD)
-        self._track(card2)
+        mode_card(-0.20, C_GREEN,  C_GREEN_DIM,
+                  "[TL]", "TAGALOG",
+                  "Type Filipino  ->  AVA signs it",
+                  "Magsimula >", self._open_tagalog)
 
-        self._label("Chatbot", (0.60, 0.24), 0.070, C_ACCENT2)
-        self._label("Ask AVA any question and she\nwill answer it through sign.",
-                    (0.60, 0.08), 0.040, C_TEXT_DIM)
+        mode_card(-0.55, C_PURPLE, C_PURPLE_DIM,
+                  "[AI]", "CHATBOT",
+                  "Ask AVA  ->  she signs the answer",
+                  "Ask AVA >", self._open_chatbot)
 
-        self._btn("Ask AVA  ▶",
-                  (0.60, 0, -0.12), 0.052,
-                  C_ACCENT2, (1,1,1,1),
-                  self._open_chatbot)
+        # ── Bottom status bar ─────────────────────────────────────────────────
+        self._hline(-0.80, C_BORDER)
+        self._panel(0, -0.92, 4.0, 0.24, (0.06, 0.07, 0.09, 1))
+        self._label("Powered by OpenRouter  |  English & Tagalog  |  openrouter.ai/keys",
+                    (0, -0.89), 0.028, C_TEXT_HINT)
+        self._label("ESC = quit   SPACE = pause   drag = orbit camera",
+                    (0, -0.97), 0.026, C_TEXT_HINT)
 
-        # ── Bottom info ───────────────────────────────────────────────────────
-        self._label("Powered by Google Gemini  •  Free API",
-                    (0, -0.52), 0.036, C_TEXT_DIM)
-        self._label("Press ESC to return here at any time",
-                    (0, -0.60), 0.034, C_TEXT_DIM)
+        self.hud.setText("")
 
-        # Update HUD
-        self.hud.setText("AVA  —  Main Menu\nClick a mode to begin")
+    # ── Shared mode chrome ────────────────────────────────────────────────────
+    def _build_mode_chrome(self, title, accent, badge_text):
+        """
+        Draw the common top-bar and bottom input panel chrome for all modes.
+        Returns nothing - widgets are tracked automatically.
+        """
+        self.setBackgroundColor(*C_BG)
+
+        # ── Top bar ───────────────────────────────────────────────────────────
+        self._panel(0, 0.91, 4.0, 0.19, C_SURFACE)
+        self._hline(0.82, accent)   # thin coloured underline beneath top bar
+
+        # Back button - left side of top bar
+        self._ghost_btn("<  Menu", (-1.18, 0, 0.91), 0.040,
+                        C_TEXT_DIM, self._build_menu)
+
+        # Mode title - centred
+        self._label(title, (0, 0.88), 0.048, accent)
+
+        # ── Bottom input panel ────────────────────────────────────────────────
+        self._panel(0, -0.88, 4.0, 0.26, C_SURFACE)
+        self._hline(-0.76, C_BORDER)
 
     # ── TRANSLATOR SCREEN ──────────────────────────────────────────────────────
     def _open_translator(self):
         self._clear_ui()
         self._screen       = self.SCREEN_TRANSLATOR
         self._signed_words = []
+        self._show_avatar()
 
-        # Header bar
-        self._label("TRANSLATOR MODE", (0, 0.88), 0.050, C_ACCENT1)
-        back = self._btn("← Menu", (-1.20, 0, 0.88), 0.042,
-                         C_CARD, C_TEXT_DIM, self._build_menu)
+        self._build_mode_chrome("TRANSLATOR", C_BLUE, "EN")
 
-        # Divider
-        div = DirectFrame(frameSize=(-1.33, 1.33, -0.002, 0.002),
-                          pos=(0, 0, 0.80), frameColor=(0.22,0.24,0.30,1))
-        self._track(div)
+        # ── Info cards (upper area, above avatar) ─────────────────────────────
+        # Gloss pill row
+        self._panel(0, 0.68, 2.80, 0.10, C_BLUE_DIM)
+        self._gloss_lbl = self._label("ASL gloss will appear here",
+                                      (0, 0.665), 0.036, C_TEXT_DIM,
+                                      may_change=True)
 
-        # Gloss display
-        self._gloss_lbl = self._label("", (0, 0.70), 0.042,
-                                      C_TEXT, may_change=True)
-
-        # Status / signed words
+        # Status row
         self._status_lbl = self._label(
             "Type a sentence below and press Enter",
-            (0, -0.68), 0.040, C_SUCCESS, may_change=True)
+            (0, -0.66), 0.036, C_SUCCESS, may_change=True)
 
-        # Input panel
-        panel = DirectFrame(
-            frameSize=(-1.33, 1.33, -0.18, 0.12),
-            pos=(0, 0, -0.84),
-            frameColor=C_CARD)
-        self._track(panel)
-
-        self._label("Your sentence:", (-1.25, -0.74), 0.036,
-                    C_TEXT_DIM, align=TextNode.ALeft)
+        # ── Input row (inside bottom panel) ───────────────────────────────────
+        self._label("English:", (-1.28, -0.815), 0.034,
+                    C_BLUE, align=TextNode.ALeft)
 
         self._entry = DirectEntry(
-            text="", scale=0.044,
-            pos=(-1.10, 0, -0.90), width=42, numLines=1, focus=0,
+            text="", scale=0.042,
+            pos=(-1.10, 0, -0.895), width=40, numLines=1, focus=0,
             focusInCommand=self._focus_in,
             focusOutCommand=self._focus_out,
             command=self._on_enter, extraArgs=[],
-            frameColor=C_INPUT_BG, text_fg=C_TEXT,
+            frameColor=C_SURFACE2, text_fg=C_TEXT,
             rolloverSound=None, clickSound=None)
         self._track(self._entry)
 
-        sign_btn = self._btn("Sign ▶", (1.15, 0, -0.90), 0.050,
-                             C_ACCENT1, (1,1,1,1),
-                             self._submit_btn)
+        self._btn("Sign >", (1.18, 0, -0.895), 0.044,
+                  C_BLUE, (0.03, 0.03, 0.05, 1), self._submit_btn)
 
         self._entry["focus"] = 1
-        print("[AVA] → Translator mode")
+        print("[AVA] -> Translator mode")
 
     # ── CHATBOT SCREEN ─────────────────────────────────────────────────────────
     def _open_chatbot(self):
         self._clear_ui()
         self._screen       = self.SCREEN_CHATBOT
         self._signed_words = []
+        self._show_avatar()
 
-        # Header bar
-        self._label("CHATBOT MODE", (0, 0.88), 0.050, C_ACCENT2)
-        self._btn("← Menu", (-1.20, 0, 0.88), 0.042,
-                  C_CARD, C_TEXT_DIM, self._build_menu)
+        self._build_mode_chrome("CHATBOT", C_PURPLE, "AI")
 
-        # Divider
-        div = DirectFrame(frameSize=(-1.33, 1.33, -0.002, 0.002),
-                          pos=(0, 0, 0.80), frameColor=(0.22,0.24,0.30,1))
-        self._track(div)
+        # ── Response card ─────────────────────────────────────────────────────
+        self._panel(0, 0.68, 2.80, 0.10, C_PURPLE_DIM)
+        self._ai_lbl = self._label("", (0, 0.665), 0.036,
+                                   (0.80, 0.65, 1.0, 1), may_change=True)
 
-        # AI response display area
-        self._ai_lbl = self._label("", (0, 0.68), 0.042,
-                                   (0.70, 0.88, 1.0, 1), may_change=True)
-
-        # Gloss display
-        self._gloss_lbl = self._label("", (0, 0.55), 0.038,
+        # Gloss row
+        self._panel(0, 0.55, 2.80, 0.08, C_SURFACE)
+        self._gloss_lbl = self._label("", (0, 0.538), 0.032,
                                       C_TEXT_DIM, may_change=True)
 
         # Thinking / status
-        self._think_lbl = self._label("", (0, -0.60), 0.042,
+        self._think_lbl = self._label("", (0, -0.62), 0.036,
                                       C_WARN, may_change=True)
-
         self._status_lbl = self._label(
-            "Ask AVA any question",
-            (0, -0.68), 0.040, C_SUCCESS, may_change=True)
+            "Ask AVA anything - she'll sign the answer",
+            (0, -0.66), 0.034, C_SUCCESS, may_change=True)
 
-        # Input panel
-        panel = DirectFrame(
-            frameSize=(-1.33, 1.33, -0.18, 0.12),
-            pos=(0, 0, -0.84),
-            frameColor=C_CARD)
-        self._track(panel)
+        if OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE":
+            self._label("[!]  No API key - add OPENROUTER_API_KEY in main.py",
+                        (0, 0.76), 0.033, C_WARN)
 
-        self._label("Your question:", (-1.25, -0.74), 0.036,
-                    C_TEXT_DIM, align=TextNode.ALeft)
+        # ── Input row ─────────────────────────────────────────────────────────
+        self._label("Question:", (-1.28, -0.815), 0.034,
+                    C_PURPLE, align=TextNode.ALeft)
 
         self._entry = DirectEntry(
-            text="", scale=0.044,
-            pos=(-1.10, 0, -0.90), width=42, numLines=1, focus=0,
+            text="", scale=0.042,
+            pos=(-1.10, 0, -0.895), width=40, numLines=1, focus=0,
             focusInCommand=self._focus_in,
             focusOutCommand=self._focus_out,
             command=self._on_enter, extraArgs=[],
-            frameColor=C_INPUT_BG, text_fg=C_TEXT,
+            frameColor=C_SURFACE2, text_fg=C_TEXT,
             rolloverSound=None, clickSound=None)
         self._track(self._entry)
 
-        self._btn("Ask ▶", (1.15, 0, -0.90), 0.050,
-                  C_ACCENT2, (1,1,1,1), self._submit_btn)
-
-        if GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
-            self._label("⚠  Add your Gemini API key in main.py",
-                        (0, 0.78), 0.038, C_WARN)
+        self._btn("Ask >", (1.18, 0, -0.895), 0.044,
+                  C_PURPLE, (0.04, 0.02, 0.07, 1), self._submit_btn)
 
         self._entry["focus"] = 1
-        print("[AVA] → Chatbot mode")
+        print("[AVA] -> Chatbot mode")
+
+    # ── TAGALOG SCREEN ─────────────────────────────────────────────────────────
+    def _open_tagalog(self):
+        self._clear_ui()
+        self._screen       = self.SCREEN_TAGALOG
+        self._signed_words = []
+        self._show_avatar()
+
+        self._build_mode_chrome("TAGALOG", C_GREEN, "TL")
+
+        # ── Translation result card ───────────────────────────────────────────
+        self._panel(0, 0.68, 2.80, 0.10, C_GREEN_DIM)
+        self._tl_lbl = self._label("", (0, 0.665), 0.036,
+                                   C_GREEN, may_change=True)
+
+        # Gloss row
+        self._panel(0, 0.55, 2.80, 0.08, C_SURFACE)
+        self._gloss_lbl = self._label("", (0, 0.538), 0.032,
+                                      C_TEXT_DIM, may_change=True)
+
+        # Thinking / status
+        self._think_lbl = self._label("", (0, -0.62), 0.036,
+                                      C_WARN, may_change=True)
+        self._status_lbl = self._label(
+            "I-type ang Tagalog na pangungusap",
+            (0, -0.66), 0.034, C_SUCCESS, may_change=True)
+
+        # ── Input row ─────────────────────────────────────────────────────────
+        self._label("Tagalog:", (-1.28, -0.815), 0.034,
+                    C_GREEN, align=TextNode.ALeft)
+
+        self._entry = DirectEntry(
+            text="", scale=0.042,
+            pos=(-1.10, 0, -0.895), width=40, numLines=1, focus=0,
+            focusInCommand=self._focus_in,
+            focusOutCommand=self._focus_out,
+            command=self._on_enter, extraArgs=[],
+            frameColor=C_SURFACE2, text_fg=C_TEXT,
+            rolloverSound=None, clickSound=None)
+        self._track(self._entry)
+
+        self._btn("I-sign >", (1.18, 0, -0.895), 0.044,
+                  C_GREEN, (0.02, 0.06, 0.04, 1), self._submit_btn)
+
+        self._entry["focus"] = 1
+        print("[AVA] -> Tagalog mode")
 
     # ── Input ─────────────────────────────────────────────────────────────────
     def _focus_in(self):
@@ -377,6 +530,11 @@ class AVAApp(Avatar):
             self._pend_think  = "AVA is thinking..."
             self._pend_status = ""
             self._q.put(("chatbot", text))
+        elif self._screen == self.SCREEN_TAGALOG:
+            print(f"[Tagalog] {text!r}")
+            self._pend_think  = "Nagsasalin..."   # "Translating..." in Filipino
+            self._pend_status = ""
+            self._q.put(("tagalog", text))
 
     # ── Background worker ─────────────────────────────────────────────────────
     def _work_loop(self):
@@ -388,6 +546,7 @@ class AVAApp(Avatar):
             if   job == "translate": self._do_translate(text)
             elif job == "chatbot":   self._do_chatbot(text)
             elif job == "partial":   self._do_partial(text)
+            elif job == "tagalog":   self._do_tagalog(text)
 
     def _do_partial(self, text):
         gloss = self.nlp.process_partial(text)
@@ -395,6 +554,26 @@ class AVAApp(Avatar):
         self._last_partial = gloss
         new = [w for w in gloss if not self.mapper.has_sign(w)]
         if new: self.mapper.preload(new)
+
+    def _do_tagalog(self, tagalog_text):
+        english, method = self.tl.translate(tagalog_text)
+        self._pend_think = ""
+        if not english:
+            self._pend_status = "Hindi ma-translate. Subukan ulit."; return
+        print(f"[Tagalog] '{tagalog_text}' -> '{english}'  [{method}]")
+        self._pend_tl = f"EN: {english}"
+        # Feed the English result into the normal translation pipeline
+        gloss = self.nlp.process(english)
+        if not gloss:
+            self._pend_status = "Could not convert to signs."; return
+        pairs = self.mapper.get_signs_for_gloss(gloss)
+        if not pairs:
+            self._pend_status = "No signs found for that sentence."; return
+        found = [w for w, _ in pairs]
+        self._pend_gloss   = "  ".join(
+            f"[{w}]" if w in found else f"({w})" for w in gloss)
+        self._signed_words = []
+        self.aqueue.interrupt(pairs)
 
     def _do_translate(self, text):
         gloss = self.nlp.process(text)
@@ -411,7 +590,7 @@ class AVAApp(Avatar):
         self.aqueue.interrupt(pairs)
 
     def _do_chatbot(self, question):
-        answer = call_gemini(question)
+        answer = call_openrouter(question)
         self._pend_think = ""
         if not answer:
             self._pend_status = "AVA could not answer. Check your API key."; return
@@ -471,17 +650,21 @@ class AVAApp(Avatar):
 
         # HUD
         fps  = globalClock.getAverageFrameRate()
-        word = self.aqueue.current_word() or "idle"
+        word = self.aqueue.current_word() or "-"
         self.hud.setText(
-            f"render {fps:.0f}fps  |  {self._screen}  |  signing: {word}\n"
-            "drag=rotate  scroll=zoom  SPACE=pause  ESC=menu")
+            f"{fps:.0f} fps  |  signing: {word}  |  drag=orbit  scroll=zoom  SPACE=pause")
 
         # Apply pending UI updates from worker thread
         if self._pend_think is not None and self._screen in (
-                self.SCREEN_CHATBOT,):
+                self.SCREEN_CHATBOT, self.SCREEN_TAGALOG):
             if hasattr(self, "_think_lbl"):
                 self._think_lbl.setText(self._pend_think)
             self._pend_think = None
+
+        if self._pend_tl is not None and self._screen == self.SCREEN_TAGALOG:
+            if hasattr(self, "_tl_lbl"):
+                self._tl_lbl.setText(self._pend_tl)
+            self._pend_tl = None
 
         if self._pend_ai is not None and self._screen == self.SCREEN_CHATBOT:
             if hasattr(self, "_ai_lbl"):
@@ -499,7 +682,7 @@ class AVAApp(Avatar):
             self._pend_status = None
         elif self._signed_words and self._screen != self.SCREEN_MENU:
             if hasattr(self, "_status_lbl"):
-                self._status_lbl.setText("✓  " + "  ".join(self._signed_words))
+                self._status_lbl.setText("OK  " + "  ".join(self._signed_words))
 
         return Task.cont
 
@@ -525,16 +708,16 @@ class AVAApp(Avatar):
 
 def main():
     print("=" * 55)
-    print("  AVA  —  Sign Language Avatar")
+    print("  AVA  -  Sign Language Avatar")
     print("=" * 55)
     if not os.path.exists(SIGNS_FOLDER):
         print(f"\n[!] Signs folder not found: {SIGNS_FOLDER}")
         print("    Create a 'Signs' folder next to main.py\n")
-    if GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
-        print("\n[!] No Gemini API key set.")
+    if OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE":
+        print("\n[!] No OpenRouter API key set.")
         print("    Chatbot mode needs a free key from:")
-        print("    https://aistudio.google.com/apikey")
-        print("    Then set: GEMINI_API_KEY=your-key  or edit main.py\n")
+        print("    https://openrouter.ai/keys")
+        print("    Then set: OPENROUTER_API_KEY=your-key  or edit main.py\n")
     AVAApp().run()
 
 if __name__ == "__main__":
